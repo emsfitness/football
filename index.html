@@ -13,10 +13,28 @@
       width: 80vw; height: 60vh; background: green; margin: 20px auto; position: relative; border: 4px solid #fff;
       background-image: 
         linear-gradient(white 2px, transparent 2px),
-        linear-gradient(90deg, white 2px, transparent 2px),
-        radial-gradient(circle at 50% 50%, transparent 20%, white 21%, white 22%, transparent 23%);
-      background-size: 100% 100%, 100% 100%, 30% 30%;
-      background-repeat: no-repeat;
+        linear-gradient(90deg, white 2px, transparent 2px);
+      background-size: 100% 50px, 50px 100%;
+      background-position: center;
+      overflow: hidden;
+    }
+    .center-circle {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      border: 2px solid white;
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .center-line {
+      position: absolute;
+      width: 2px;
+      height: 100%;
+      background: white;
+      left: 50%;
+      transform: translateX(-50%);
     }
     .ball, .player-icon {
       width: 30px; height: 30px; position: absolute; border-radius: 50%;
@@ -65,6 +83,8 @@
     <div id="scoreBoard">النتيجة: <span id="scoreA">0</span> - <span id="scoreB">0</span></div>
     <div id="timer">الوقت المتبقي: <span id="timeLeft">10:00</span></div>
     <div id="field">
+      <div class="center-line"></div>
+      <div class="center-circle"></div>
       <div class="goal left" id="leftGoal">مرمى A</div>
       <div class="goal right" id="rightGoal">مرمى B</div>
       <div class="ball" id="ball">⚽</div>
@@ -95,7 +115,6 @@
     const gameStartedRef = db.ref(`${matchId}/gameStarted`);
     const scoreRef = db.ref(`${matchId}/score`);
     const ballRef = db.ref(`${matchId}/ball`);
-    const ballVelocityRef = db.ref(`${matchId}/ballVelocity`);
     const timeRef = db.ref(`${matchId}/time`);
 
     let currentPlayer = "";
@@ -128,7 +147,7 @@
 
       playerRef.set({
         name: name,
-        x: 50,
+        x: name === playerNames[0] ? 40 : 60, // وضع اللاعبين على جانبي الملعب
         y: 50,
         joinedAt: Date.now()
       });
@@ -173,7 +192,6 @@
       db.ref(matchId).update({
         gameStarted: true,
         ball: { x: 50, y: 50 },
-        ballVelocity: { x: 0, y: 0 },
         score: { A: 0, B: 0 },
         time: gameDuration
       });
@@ -231,47 +249,19 @@
       }
     }
 
-    function updateBallPosition() {
-      ballRef.once("value").then(ballSnap => {
-        ballVelocityRef.once("value").then(velocitySnap => {
-          const ball = ballSnap.val();
-          const velocity = velocitySnap.val() || { x: 0, y: 0 };
-          
-          if (!ball) return;
-
-          // تطبيق السرعة على الكرة
-          let newX = ball.x + velocity.x;
-          let newY = ball.y + velocity.y;
-
-          // الحدود الحقل
-          if (newX < 0) newX = 0;
-          if (newX > 100) newX = 100;
-          if (newY < 0) newY = 0;
-          if (newY > 100) newY = 100;
-
-          // تطبيق الاحتكاك (تقليل السرعة تدريجياً)
-          const friction = 0.98;
-          const newVelocity = {
-            x: Math.abs(velocity.x) > 0.1 ? velocity.x * friction : 0,
-            y: Math.abs(velocity.y) > 0.1 ? velocity.y * friction : 0
-          };
-
-          // تحديث موقع الكرة والسرعة
-          ballRef.set({ x: newX, y: newY });
-          ballVelocityRef.set(newVelocity);
-        });
-      });
-    }
-
     function resetPositions() {
       playersRef.once("value").then(snap => {
         const updates = {};
-        Object.keys(snap.val() || {}).forEach(name => {
-          updates[`${matchId}/players/${name}/x`] = 50;
+        const players = snap.val() || {};
+        const playerList = Object.keys(players);
+        
+        playerList.forEach((name, index) => {
+          // وضع اللاعب الأول على اليسار والثاني على اليمين
+          updates[`${matchId}/players/${name}/x`] = index === 0 ? 40 : 60;
           updates[`${matchId}/players/${name}/y`] = 50;
         });
+        
         updates[`${matchId}/ball`] = { x: 50, y: 50 };
-        updates[`${matchId}/ballVelocity`] = { x: 0, y: 0 };
         db.ref().update(updates);
       });
     }
@@ -286,8 +276,15 @@
       location.reload();
     }
 
-    function startBallPhysics() {
-      setInterval(updateBallPosition, 50);
+    function checkBallCollision(ball) {
+      // ارتداد الكرة عند حدود الملعب
+      if (ball.x <= 2 || ball.x >= 98) {
+        return { x: -ball.x, y: ball.y }; // عكس اتجاه X
+      }
+      if (ball.y <= 2 || ball.y >= 98) {
+        return { x: ball.x, y: -ball.y }; // عكس اتجاه Y
+      }
+      return null;
     }
 
     playersRef.on("value", snapshot => {
@@ -311,17 +308,19 @@
       if (gameStarted) {
         showScreen("gameField");
         startCountdown();
-        startBallPhysics();
       }
     });
 
     ballRef.on("value", snapshot => {
       const ball = snapshot.val();
-      if (ball) renderBall(ball);
-    });
-
-    ballVelocityRef.on("value", snapshot => {
-      // يمكنك استخدام هذه البيانات إذا كنت تريد عرض سرعة الكرة
+      if (ball) {
+        const collision = checkBallCollision(ball);
+        if (collision) {
+          ballRef.set(collision);
+        } else {
+          renderBall(ball);
+        }
+      }
     });
 
     scoreRef.on("value", snapshot => {
@@ -364,22 +363,17 @@
           const dist = Math.sqrt(dx * dx + dy * dy);
 
           if (dist < 5) {
-            // حساب سرعة جديدة للكرة بناءً على اتجاه حركة اللاعب
-            let velocityX = 0;
-            let velocityY = 0;
+            // تحريك الكرة مسافة صغيرة (حوالي 2 سم) في اتجاه الضربة
+            let newX = ball.x;
+            let newY = ball.y;
+            const moveDistance = 2; // مسافة الحركة الصغيرة
             
-            if (e.key === "ArrowUp") velocityY = -3;
-            if (e.key === "ArrowDown") velocityY = 3;
-            if (e.key === "ArrowLeft") velocityX = -3;
-            if (e.key === "ArrowRight") velocityX = 3;
+            if (e.key === "ArrowUp") newY = Math.max(0, ball.y - moveDistance);
+            if (e.key === "ArrowDown") newY = Math.min(100, ball.y + moveDistance);
+            if (e.key === "ArrowLeft") newX = Math.max(0, ball.x - moveDistance);
+            if (e.key === "ArrowRight") newX = Math.min(100, ball.x + moveDistance);
             
-            // إذا كان اللاعب يتحرك قطرياً، نجمع المركبات
-            if (Math.abs(velocityX) > 0 && Math.abs(velocityY) > 0) {
-              velocityX *= 0.7;
-              velocityY *= 0.7;
-            }
-
-            ballVelocityRef.set({ x: velocityX, y: velocityY });
+            ballRef.set({ x: newX, y: newY });
           }
         });
       });
