@@ -9,14 +9,28 @@
     .active { display: block; }
     #playersList { margin-top: 10px; }
     .player { background: #fff; padding: 10px; margin: 5px auto; width: 200px; border-radius: 5px; }
-    #field { width: 80vw; height: 60vh; background: green; margin: 20px auto; position: relative; border: 4px solid #fff; }
+    #field {
+      width: 80vw; height: 60vh; background: green; margin: 20px auto; position: relative; border: 4px solid #fff;
+      background-image: 
+        linear-gradient(90deg, white 2px, transparent 2px),
+        radial-gradient(circle at 50% 50%, transparent 20%, white 21%, white 22%, transparent 23%);
+      background-size: 50px 100%, 30% 30%;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
     .ball, .player-icon {
       width: 30px; height: 30px; position: absolute; border-radius: 50%;
       text-align: center; line-height: 30px; font-weight: bold; color: white;
     }
-    .ball { background: orange; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+    .ball { background: orange; transform: translate(-50%, -50%); z-index: 10; }
     .player-icon { background: blue; }
+    .goal { position: absolute; width: 10%; height: 20%; background: red; opacity: 0.5; }
+    .goal.left { left: 0; top: 40%; }
+    .goal.right { right: 0; top: 40%; }
+    #scoreBoard { font-size: 20px; margin: 10px; }
+    #timer { font-size: 18px; }
     button { padding: 10px 20px; font-size: 16px; margin-top: 10px; }
+    #messageArea { margin-top: 20px; font-size: 18px; color: red; display: none; }
   </style>
 </head>
 <body>
@@ -38,10 +52,15 @@
   <!-- ساحة المباراة -->
   <div id="gameField" class="screen">
     <h2>🏟️ ساحة المباراة</h2>
+    <div id="scoreBoard">النتيجة: <span id="scoreA">0</span> - <span id="scoreB">0</span></div>
+    <div id="timer">الوقت المتبقي: <span id="timeLeft">10:00</span></div>
     <div id="field">
+      <div class="goal left"></div>
+      <div class="goal right"></div>
       <div class="ball" id="ball">⚽</div>
     </div>
     <button onclick="resetGame()">🏁 إنهاء المباراة</button>
+    <div id="messageArea"></div>
   </div>
 
   <!-- Firebase SDK -->
@@ -61,11 +80,33 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
+    const matchId = new URLSearchParams(location.search).get("match") || "defaultMatch";
+    const playersRef = db.ref(`${matchId}/players`);
+    const gameStartedRef = db.ref(`${matchId}/gameStarted`);
+    const scoreRef = db.ref(`${matchId}/score`);
+    const ballRef = db.ref(`${matchId}/ball`);
+    const timeRef = db.ref(`${matchId}/time`);
+    const ballVelocityRef = db.ref(`${matchId}/ballVelocity`);
+
     let currentPlayer = "";
+    let isHost = false;
+    let timerInterval;
+    let gameDuration = 600;
+    let gameStarted = false;
+    let lastPlayerHit = null;
 
     function showScreen(id) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
       document.getElementById(id).classList.add('active');
+    }
+
+    function showMessage(msg, duration = 2000) {
+      const area = document.getElementById("messageArea");
+      area.textContent = msg;
+      area.style.display = "block";
+      setTimeout(() => {
+        area.style.display = "none";
+      }, duration);
     }
 
     function joinGame() {
@@ -73,15 +114,29 @@
       if (!name) return alert("اكتب اسمك!");
 
       currentPlayer = name;
-      const playerRef = db.ref("players/" + name);
+      const playerRef = playersRef.child(name);
 
       playerRef.set({
         name: name,
-        x: Math.random() * 70 + 10,
-        y: Math.random() * 40 + 10
+        x: 50,
+        y: 50,
+        joinedAt: Date.now()
       });
 
-      showScreen("waitingRoom");
+      playersRef.once("value").then(snapshot => {
+        const players = snapshot.val();
+        const playerNames = Object.keys(players || {});
+        if (playerNames.length === 1 || playerNames[0] === name) isHost = true;
+      });
+
+      gameStartedRef.once("value").then(snap => {
+        if (snap.val()) {
+          alert("المباراة بدأت بالفعل، لا يمكن الانضمام الآن.");
+          return;
+        } else {
+          showScreen("waitingRoom");
+        }
+      });
     }
 
     function updateWaitingRoom(players) {
@@ -96,13 +151,39 @@
     }
 
     function startGame() {
-      db.ref("gameStarted").set(true);
+      if (!isHost) return alert("فقط من بدأ الغرفة يمكنه بدء المباراة!");
+      db.ref(matchId).update({
+        gameStarted: true,
+        ball: { x: 50, y: 50 },
+        ballVelocity: { x: 0, y: 0 },
+        score: { A: 0, B: 0 },
+        time: gameDuration
+      });
+    }
+
+    function updateTimer(seconds) {
+      const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+      const s = String(seconds % 60).padStart(2, '0');
+      document.getElementById("timeLeft").textContent = `${m}:${s}`;
+    }
+
+    function startCountdown() {
+      timerInterval = setInterval(() => {
+        timeRef.once("value").then(snap => {
+          let t = snap.val();
+          if (t <= 0) {
+            clearInterval(timerInterval);
+            showMessage("انتهى وقت المباراة!");
+            return;
+          }
+          timeRef.set(t - 1);
+        });
+      }, 1000);
     }
 
     function renderPlayers(players) {
       const field = document.getElementById("field");
       field.querySelectorAll(".player-icon").forEach(p => p.remove());
-
       Object.values(players).forEach((p, i) => {
         const el = document.createElement("div");
         el.className = "player-icon";
@@ -113,32 +194,143 @@
       });
     }
 
+    function updateBallPosition() {
+      ballRef.once("value").then(ballSnap => {
+        ballVelocityRef.once("value").then(velSnap => {
+          const ball = ballSnap.val();
+          const velocity = velSnap.val() || { x: 0, y: 0 };
+          
+          if (!ball) return;
+          
+          // Apply friction to slow down the ball (increased friction to weaken movement)
+          const friction = 0.92; // Increased from 0.98 to make the ball stop faster
+          let newVx = velocity.x * friction;
+          let newVy = velocity.y * friction;
+          
+          // Stop the ball if velocity is very small
+          if (Math.abs(newVx) < 0.05) newVx = 0;
+          if (Math.abs(newVy) < 0.05) newVy = 0;
+          
+          // Calculate new position with boundary checks
+          let newBallX = ball.x + newVx;
+          let newBallY = ball.y + newVy;
+          
+          // Prevent ball from getting stuck at boundaries
+          const buffer = 0.5; // Small buffer to keep ball inside field
+          if (newBallX <= buffer) newBallX = buffer;
+          if (newBallX >= 100 - buffer) newBallX = 100 - buffer;
+          if (newBallY <= buffer) newBallY = buffer;
+          if (newBallY >= 100 - buffer) newBallY = 100 - buffer;
+          
+          // If ball hits boundary, reverse direction with reduced force
+          if (newBallX <= buffer || newBallX >= 100 - buffer) {
+            newVx = -newVx * 0.5; // Reduce bounce force
+          }
+          if (newBallY <= buffer || newBallY >= 100 - buffer) {
+            newVy = -newVy * 0.5; // Reduce bounce force
+          }
+          
+          ballRef.set({ x: newBallX, y: newBallY });
+          ballVelocityRef.set({ x: newVx, y: newVy });
+          
+          // Check for goals
+          if (newBallX < 5 && newBallY > 40 && newBallY < 60) {
+            scoreRef.child("A").transaction(v => (v || 0) + 1);
+            showMessage("هدف للفريق A");
+            resetPositions();
+          }
+          if (newBallX > 95 && newBallY > 40 && newBallY < 60) {
+            scoreRef.child("B").transaction(v => (v || 0) + 1);
+            showMessage("هدف للفريق B");
+            resetPositions();
+          }
+        });
+      });
+    }
+
+    function resetPositions() {
+      playersRef.once("value").then(snap => {
+        const updates = {};
+        Object.keys(snap.val() || {}).forEach(name => {
+          updates[`${matchId}/players/${name}/x`] = 50;
+          updates[`${matchId}/players/${name}/y`] = 50;
+        });
+        updates[`${matchId}/ball`] = { x: 50, y: 50 };
+        updates[`${matchId}/ballVelocity`] = { x: 0, y: 0 };
+        db.ref().update(updates);
+      });
+    }
+
+    function renderScore(score) {
+      document.getElementById("scoreA").textContent = score.A || 0;
+      document.getElementById("scoreB").textContent = score.B || 0;
+    }
+
     function resetGame() {
-      db.ref().set({});
+      db.ref(matchId).set({});
       location.reload();
     }
 
-    // استمع لأي تغيّر في اللاعبين
-    db.ref("players").on("value", snapshot => {
+    function handleBallCollision(playerX, playerY, ballX, ballY, playerName) {
+      const dx = ballX - playerX;
+      const dy = ballY - playerY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance < 5) {
+        // Prevent the same player from hitting the ball multiple times in quick succession
+        if (lastPlayerHit === playerName) return;
+        lastPlayerHit = playerName;
+        setTimeout(() => { lastPlayerHit = null; }, 500);
+        
+        // Calculate new velocity based on player-ball vector (reduced power)
+        const power = 1.5; // Reduced from 3 to make the ball move less distance
+        const newVx = (dx / distance) * power;
+        const newVy = (dy / distance) * power;
+        
+        ballVelocityRef.set({ x: newVx, y: newVy });
+      }
+    }
+
+    playersRef.on("value", snapshot => {
       const players = snapshot.val() || {};
       updateWaitingRoom(players);
       renderPlayers(players);
     });
 
-    // استمع لبداية المباراة
-    db.ref("gameStarted").on("value", snapshot => {
-      if (snapshot.val()) {
+    gameStartedRef.on("value", snapshot => {
+      gameStarted = snapshot.val();
+      if (gameStarted) {
         showScreen("gameField");
+        startCountdown();
+        // Update ball position continuously
+        setInterval(updateBallPosition, 50);
       }
     });
 
-    // تحكم اللاعب بأسهم الكيبورد
+    ballRef.on("value", snapshot => {
+      const ball = snapshot.val();
+      if (ball) {
+        const ballEl = document.getElementById("ball");
+        ballEl.style.left = ball.x + "%";
+        ballEl.style.top = ball.y + "%";
+      }
+    });
+
+    scoreRef.on("value", snapshot => {
+      const score = snapshot.val() || { A: 0, B: 0 };
+      renderScore(score);
+    });
+
+    timeRef.on("value", snapshot => {
+      updateTimer(snapshot.val() || 0);
+    });
+
     document.addEventListener("keydown", (e) => {
-      if (!currentPlayer) return;
+      if (!currentPlayer || !gameStarted) return;
       const allowed = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
       if (!allowed.includes(e.key)) return;
 
-      const playerRef = db.ref("players/" + currentPlayer);
+      const playerRef = playersRef.child(currentPlayer);
       playerRef.once("value").then((snap) => {
         let data = snap.val();
         if (!data) return;
@@ -153,6 +345,13 @@
         if (e.key === "ArrowRight") x = Math.min(100, x + step);
 
         playerRef.update({ x, y });
+
+        ballRef.once("value").then(bSnap => {
+          const ball = bSnap.val();
+          if (!ball) return;
+          
+          handleBallCollision(x, y, ball.x, ball.y, currentPlayer);
+        });
       });
     });
   </script>
