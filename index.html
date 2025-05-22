@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <title>ماتش كورة بين لاعبين</title>
+  <style>
+    body { font-family: Arial; text-align: center; background: #d0f0ff; margin: 0; padding: 0; }
+    .screen { display: none; padding: 20px; }
+    .active { display: block; }
+    #playersList { margin-top: 10px; }
+    .player { background: #fff; padding: 10px; margin: 5px auto; width: 200px; border-radius: 5px; }
+    #field { width: 80vw; height: 60vh; background: green; margin: 20px auto; position: relative; border: 4px solid #fff; }
+    .ball, .player-icon {
+      width: 30px; height: 30px; position: absolute; border-radius: 50%;
+      text-align: center; line-height: 30px; font-weight: bold; color: white;
+    }
+    .ball { background: orange; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+    .player-icon { background: blue; }
+    button { padding: 10px 20px; font-size: 16px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+  <!-- واجهة الدخول -->
+  <div id="loginScreen" class="screen active">
+    <h2>أدخل اسمك للانضمام:</h2>
+    <input type="text" id="playerName" placeholder="اسم اللاعب">
+    <button onclick="joinGame()">انضم</button>
+  </div>
+
+  <!-- غرفة الانتظار -->
+  <div id="waitingRoom" class="screen">
+    <h2>غرفة الانتظار</h2>
+    <div id="playersList"></div>
+    <button onclick="startGame()">ابدأ المباراة</button>
+  </div>
+
+  <!-- ساحة المباراة -->
+  <div id="gameField" class="screen">
+    <h2>🏟️ ساحة المباراة</h2>
+    <div id="field">
+      <div class="ball" id="ball">⚽</div>
+    </div>
+    <button onclick="resetGame()">🏁 إنهاء المباراة</button>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDUFdNboswpWIs0I5ry4aJs3aXHlg1CKkM",
+      authDomain: "match-9d433.firebaseapp.com",
+      projectId: "match-9d433",
+      storageBucket: "match-9d433.firebasestorage.app",
+      messagingSenderId: "1050352234947",
+      appId: "1:1050352234947:web:74aa21731ea3b94637cd76",
+      measurementId: "G-59QRBNR1WQ",
+      databaseURL: "https://match-9d433-default-rtdb.firebaseio.com"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let currentPlayer = "";
+
+    function showScreen(id) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+    }
+
+    function joinGame() {
+      const name = document.getElementById('playerName').value.trim();
+      if (!name) return alert("اكتب اسمك!");
+
+      currentPlayer = name;
+      const playerRef = db.ref("players/" + name);
+
+      playerRef.set({
+        name: name,
+        x: Math.random() * 70 + 10,
+        y: Math.random() * 40 + 10
+      });
+
+      showScreen("waitingRoom");
+    }
+
+    function updateWaitingRoom(players) {
+      const list = document.getElementById("playersList");
+      list.innerHTML = "";
+      Object.values(players).forEach(p => {
+        const div = document.createElement("div");
+        div.className = "player";
+        div.textContent = p.name;
+        list.appendChild(div);
+      });
+    }
+
+    function startGame() {
+      db.ref("gameStarted").set(true);
+    }
+
+    function renderPlayers(players) {
+      const field = document.getElementById("field");
+      field.querySelectorAll(".player-icon").forEach(p => p.remove());
+
+      Object.values(players).forEach((p, i) => {
+        const el = document.createElement("div");
+        el.className = "player-icon";
+        el.textContent = i + 1;
+        el.style.left = p.x + "%";
+        el.style.top = p.y + "%";
+        field.appendChild(el);
+      });
+    }
+
+    function resetGame() {
+      db.ref().set({});
+      location.reload();
+    }
+
+    // استمع لأي تغيّر في اللاعبين
+    db.ref("players").on("value", snapshot => {
+      const players = snapshot.val() || {};
+      updateWaitingRoom(players);
+      renderPlayers(players);
+    });
+
+    // استمع لبداية المباراة
+    db.ref("gameStarted").on("value", snapshot => {
+      if (snapshot.val()) {
+        showScreen("gameField");
+      }
+    });
+
+    // تحكم اللاعب بأسهم الكيبورد
+    document.addEventListener("keydown", (e) => {
+      if (!currentPlayer) return;
+      const allowed = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+      if (!allowed.includes(e.key)) return;
+
+      const playerRef = db.ref("players/" + currentPlayer);
+      playerRef.once("value").then((snap) => {
+        let data = snap.val();
+        if (!data) return;
+
+        let x = data.x;
+        let y = data.y;
+        const step = 2;
+
+        if (e.key === "ArrowUp") y = Math.max(0, y - step);
+        if (e.key === "ArrowDown") y = Math.min(100, y + step);
+        if (e.key === "ArrowLeft") x = Math.max(0, x - step);
+        if (e.key === "ArrowRight") x = Math.min(100, x + step);
+
+        playerRef.update({ x, y });
+      });
+    });
+  </script>
+</body>
+</html>
