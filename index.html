@@ -12,17 +12,17 @@
     #field {
       width: 80vw; height: 60vh; background: green; margin: 20px auto; position: relative; border: 4px solid #fff;
       background-image: 
+        linear-gradient(white 2px, transparent 2px),
         linear-gradient(90deg, white 2px, transparent 2px),
         radial-gradient(circle at 50% 50%, transparent 20%, white 21%, white 22%, transparent 23%);
-      background-size: 50px 100%, 30% 30%;
-      background-position: center;
+      background-size: 100% 100%, 100% 100%, 30% 30%;
       background-repeat: no-repeat;
     }
     .ball, .player-icon {
       width: 30px; height: 30px; position: absolute; border-radius: 50%;
       text-align: center; line-height: 30px; font-weight: bold; color: white;
     }
-    .ball { background: orange; transform: translate(-50%, -50%); z-index: 10; }
+    .ball { background: orange; transform: translate(-50%, -50%); }
     .player-icon { background: blue; }
     .goal { position: absolute; width: 10%; height: 20%; background: red; opacity: 0.5; }
     .goal.left { left: 0; top: 40%; }
@@ -86,14 +86,12 @@
     const scoreRef = db.ref(`${matchId}/score`);
     const ballRef = db.ref(`${matchId}/ball`);
     const timeRef = db.ref(`${matchId}/time`);
-    const ballVelocityRef = db.ref(`${matchId}/ballVelocity`);
 
     let currentPlayer = "";
     let isHost = false;
     let timerInterval;
     let gameDuration = 600;
     let gameStarted = false;
-    let lastPlayerHit = null;
 
     function showScreen(id) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -155,7 +153,6 @@
       db.ref(matchId).update({
         gameStarted: true,
         ball: { x: 50, y: 50 },
-        ballVelocity: { x: 0, y: 0 },
         score: { A: 0, B: 0 },
         time: gameDuration
       });
@@ -194,58 +191,21 @@
       });
     }
 
-    function updateBallPosition() {
-      ballRef.once("value").then(ballSnap => {
-        ballVelocityRef.once("value").then(velSnap => {
-          const ball = ballSnap.val();
-          const velocity = velSnap.val() || { x: 0, y: 0 };
-          
-          if (!ball) return;
-          
-          // Apply friction to slow down the ball (increased friction to weaken movement)
-          const friction = 0.92; // Increased from 0.98 to make the ball stop faster
-          let newVx = velocity.x * friction;
-          let newVy = velocity.y * friction;
-          
-          // Stop the ball if velocity is very small
-          if (Math.abs(newVx) < 0.05) newVx = 0;
-          if (Math.abs(newVy) < 0.05) newVy = 0;
-          
-          // Calculate new position with boundary checks
-          let newBallX = ball.x + newVx;
-          let newBallY = ball.y + newVy;
-          
-          // Prevent ball from getting stuck at boundaries
-          const buffer = 0.5; // Small buffer to keep ball inside field
-          if (newBallX <= buffer) newBallX = buffer;
-          if (newBallX >= 100 - buffer) newBallX = 100 - buffer;
-          if (newBallY <= buffer) newBallY = buffer;
-          if (newBallY >= 100 - buffer) newBallY = 100 - buffer;
-          
-          // If ball hits boundary, reverse direction with reduced force
-          if (newBallX <= buffer || newBallX >= 100 - buffer) {
-            newVx = -newVx * 0.5; // Reduce bounce force
-          }
-          if (newBallY <= buffer || newBallY >= 100 - buffer) {
-            newVy = -newVy * 0.5; // Reduce bounce force
-          }
-          
-          ballRef.set({ x: newBallX, y: newBallY });
-          ballVelocityRef.set({ x: newVx, y: newVy });
-          
-          // Check for goals
-          if (newBallX < 5 && newBallY > 40 && newBallY < 60) {
-            scoreRef.child("A").transaction(v => (v || 0) + 1);
-            showMessage("هدف للفريق A");
-            resetPositions();
-          }
-          if (newBallX > 95 && newBallY > 40 && newBallY < 60) {
-            scoreRef.child("B").transaction(v => (v || 0) + 1);
-            showMessage("هدف للفريق B");
-            resetPositions();
-          }
-        });
-      });
+    function renderBall(ball) {
+      const el = document.getElementById("ball");
+      el.style.left = ball.x + "%";
+      el.style.top = ball.y + "%";
+
+      if (ball.x < 5 && ball.y > 40 && ball.y < 60) {
+        scoreRef.child("A").transaction(v => (v || 0) + 1);
+        showMessage("هدف للفريق A");
+        resetPositions();
+      }
+      if (ball.x > 95 && ball.y > 40 && ball.y < 60) {
+        scoreRef.child("B").transaction(v => (v || 0) + 1);
+        showMessage("هدف للفريق B");
+        resetPositions();
+      }
     }
 
     function resetPositions() {
@@ -256,7 +216,6 @@
           updates[`${matchId}/players/${name}/y`] = 50;
         });
         updates[`${matchId}/ball`] = { x: 50, y: 50 };
-        updates[`${matchId}/ballVelocity`] = { x: 0, y: 0 };
         db.ref().update(updates);
       });
     }
@@ -271,24 +230,18 @@
       location.reload();
     }
 
-    function handleBallCollision(playerX, playerY, ballX, ballY, playerName) {
-      const dx = ballX - playerX;
-      const dy = ballY - playerY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      
-      if (distance < 5) {
-        // Prevent the same player from hitting the ball multiple times in quick succession
-        if (lastPlayerHit === playerName) return;
-        lastPlayerHit = playerName;
-        setTimeout(() => { lastPlayerHit = null; }, 500);
-        
-        // Calculate new velocity based on player-ball vector (reduced power)
-        const power = 1.5; // Reduced from 3 to make the ball move less distance
-        const newVx = (dx / distance) * power;
-        const newVy = (dy / distance) * power;
-        
-        ballVelocityRef.set({ x: newVx, y: newVy });
-      }
+    function startBallMovement() {
+      setInterval(() => {
+        ballRef.once("value").then(snap => {
+          const ball = snap.val();
+          if (!ball) return;
+          let dx = (Math.random() - 0.5) * 4;
+          let dy = (Math.random() - 0.5) * 4;
+          const newBallX = Math.min(100, Math.max(0, ball.x + dx));
+          const newBallY = Math.min(100, Math.max(0, ball.y + dy));
+          ballRef.set({ x: newBallX, y: newBallY });
+        });
+      }, 1000);
     }
 
     playersRef.on("value", snapshot => {
@@ -302,18 +255,13 @@
       if (gameStarted) {
         showScreen("gameField");
         startCountdown();
-        // Update ball position continuously
-        setInterval(updateBallPosition, 50);
+        startBallMovement();
       }
     });
 
     ballRef.on("value", snapshot => {
       const ball = snapshot.val();
-      if (ball) {
-        const ballEl = document.getElementById("ball");
-        ballEl.style.left = ball.x + "%";
-        ballEl.style.top = ball.y + "%";
-      }
+      if (ball) renderBall(ball);
     });
 
     scoreRef.on("value", snapshot => {
@@ -349,8 +297,16 @@
         ballRef.once("value").then(bSnap => {
           const ball = bSnap.val();
           if (!ball) return;
-          
-          handleBallCollision(x, y, ball.x, ball.y, currentPlayer);
+
+          const dx = ball.x - x;
+          const dy = ball.y - y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < 5) {
+            const newBallX = Math.min(100, Math.max(0, ball.x + dx * 2));
+            const newBallY = Math.min(100, Math.max(0, ball.y + dy * 2));
+            ballRef.set({ x: newBallX, y: newBallY });
+          }
         });
       });
     });
